@@ -22,6 +22,14 @@ pub struct Bno085Imu<I2C, HINT>
     address: u8,
 }
 
+#[derive(Debug, Default)]
+pub struct BnoData
+{
+    pub quat: Option<(f32,f32,f32,f32)>, //r, i ,j,k olarak dnecek
+    pub gyro: Option<(f32,f32,f32)>, // rad/s biriminde x,y,z
+    pub accel: Option<(f32,f32,f32)>, // m/s^2 biriminde x,y,z
+}
+
 impl<I2C, HINT, I2cE> Bno085Imu<I2C, HINT>
 where
     I2C: I2c<Error = I2cE>,
@@ -31,74 +39,102 @@ where
     {
         Self { i2c, hint_pin, address }
     }
-    pub async fn init(&mut self) -> Result<(), BnoError<I2cE>>
+    pub async fn active_fut(&mut self, fut_id: u8, timehz: u32) -> Result<(), BnoError<I2cE>>
     {
-        let mut packet = [0u8; 21];
-        packet[0] = 21;    // LSB uzunluğu
-        packet[1] = 0;     // MSB uzunluğu
-        packet[2] = 2;     // Kanal numarası 2 numara kontrol 3 veri okuma
-        packet[3] = 0;
-        packet[4] = 0xFD;  // report id ; 0xFD = set feature commandı
-        packet[5] = 0x05;  // feature ; 0x05 = rotation vector ve quaternion
-        packet[6] = 0;
-        packet[7] = 0;
-        packet[8] = 0;
-        packet[9] = 0x20;
-        packet[10] = 0x4E; 
-        packet[11] = 0x00; 
-        packet[12] = 0x00;
-        packet[13] = 0;
-        packet[14] = 0;
-        packet[15] = 0;
-        packet[16] = 0;
-        packet[17] = 0;
-        packet[18] = 0;
-        packet[19] = 0;
-        packet[20] = 0;
-        self.i2c.write(self.address, &packet).await.map_err(BnoError::I2c)?;
+        let mut send_pack = [0u8; 21];
+        send_pack[0] = 21;
+        send_pack[1] = 0;
+        send_pack[2] = 2;
+        send_pack[3] = 0;
+        send_pack[4] = 0xFD;
+        send_pack[5] = fut_id;
+        send_pack[9] = (timehz & 0xFF) as u8;
+        send_pack[10] = ((timehz >> 8) & 0xFF) as u8;
+        send_pack[11] = ((timehz >> 16) & 0xFF) as u8;
+        send_pack[12] = ((timehz >> 24) & 0xFF) as u8;
+        self.i2c.write(self.address, &send_pack).await.map_err(BnoError::I2c)?;
         Ok(())
     }
-    pub async fn read_quat(&mut self) -> Result<(f32,f32,f32,f32), BnoError<I2cE>>
+    pub async fn read_val(&mut self) -> Result<BnoData, BnoError<I2cE>>
     {
         self.hint_pin.wait_for_low().await.map_err(|_| BnoError::PinError)?;
-        let mut header_check = [0u8; 4];
-        self.i2c.read(self.address, &mut header_check).await.map_err(BnoError::I2c)?;
-        let bucket_lenght = ((header_check[1] as u16) << 8 | (header_check[0] as u16)) & 0x7FFF;
-        let channel = header_check[2];
-        if bucket_lenght <= 4
+        let mut header_buff = [0u8; 4];
+        self.i2c.read(self.address, &mut header_buff).await.map_err(BnoError::I2c)?;
+        let bucket_length = ((header_buff[1] as u16) << 8 | (header_buff[0] as u16)) & 0x7FFF;
+        let channel = header_buff[2];
+        if bucket_length <= 4
         {
-            return Err(BnoError::InvalidLength(bucket_lenght));
+            return Err(BnoError::InvalidLength(bucket_length));
         }
         let mut buffer = [0u8; 300];
-        let read_len = bucket_lenght as usize;
+        let read_len = bucket_length as usize;
         if read_len > buffer.len()
         {
-            return Err(BnoError::InvalidLength(bucket_lenght));
+            return Err(BnoError::InvalidLength(bucket_length));
         }
         self.i2c.read(self.address, &mut buffer[..read_len]).await.map_err(BnoError::I2c)?;
-        if channel == 3 
+        let mut data = BnoData::default();
+        let mut has_data = false;
+        if channel == 3
         {
-            let index = 9; 
-            while index + 14 <= read_len
+            let mut index = 9;
+            while index < read_len
             {
                 let report_id = buffer[index];
-                if report_id == 0x05
-                { 
+                if report_id == 0x05 && index + 14 <= read_len
+                {
+                    //quaternion
                     let i = i16::from_le_bytes([buffer[index + 4], buffer[index + 5]]);
                     let j = i16::from_le_bytes([buffer[index + 6], buffer[index + 7]]);
                     let k = i16::from_le_bytes([buffer[index + 8], buffer[index + 9]]);
                     let r = i16::from_le_bytes([buffer[index + 10], buffer[index + 11]]);
-                    const Q_VAL_DTSHT: f32 = 16384.0; //2^14
-                    let q_i = (i as f32) / Q_VAL_DTSHT;
-                    let q_j = (j as f32) / Q_VAL_DTSHT;
-                    let q_k = (k as f32) / Q_VAL_DTSHT;
-                    let q_r = (r as f32) / Q_VAL_DTSHT;
-                    return Ok((q_r, q_i, q_j, q_k));
+                    data.quat = Some((r as f32 / 16384.0, i as f32 / 16384.0, j as f32 / 16384.0, k as f32 / 16384.0));
+                    index += 14;
+                    has_data = true;
                 }
-                else {return Err(BnoError::UnexpectedReport(report_id));}
+                else if report_id == 0x02 && index + 10 <= read_len
+                {
+                    //jiroskop
+                    let x = i16::from_le_bytes([buffer[index + 4], buffer[index + 5]]);
+                    let y = i16::from_le_bytes([buffer[index + 6], buffer[index + 7]]);
+                    let z = i16::from_le_bytes([buffer[index + 8], buffer[index + 9]]);
+                    data.gyro = Some((x as f32 / 512.0, y as f32 / 512.0, z as f32 / 512.0));
+                    index += 10;
+                    has_data = true;
+                }
+                else if report_id == 0x04 && index + 10 <= read_len
+                {
+                    //doğrusal ivme
+                    let x = i16::from_le_bytes([buffer[index + 4], buffer[index + 5]]);
+                    let y = i16::from_le_bytes([buffer[index + 6], buffer[index + 7]]);
+                    let z = i16::from_le_bytes([buffer[index + 8], buffer[index + 9]]);
+                    data.accel = Some((x as f32 / 256.0, y as f32 / 256.0, z as f32 / 256.0));
+                    index += 10;
+                    has_data = true;
+                }
+                else if report_id == 0xFB && index + 5 <= read_len
+                {
+                    //gereksiz zaman dalgalarına karşı atlama
+                    index += 5;
+                }
+                else
+                {
+                    //yanlış, eksik raporda döngüden çık, üzme
+                    break;
+                }
             }
         }
-        //else {return Err(BnoError::WrongChannel(channel));}
-        Err(BnoError::InvalidLength(bucket_lenght))
+        else
+        {
+            return Err(BnoError::WrongChannel(channel));
+        }
+        if has_data
+        {
+            Ok(data)
+        }
+        else
+        {
+            Err(BnoError::UnexpectedReport(buffer[9])) // verisiz gereksiz paket
+        }
     }
 }

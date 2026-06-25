@@ -46,25 +46,34 @@ async fn imu_task(i2c_bus: I2c<'static, embassy_rp::peripherals::I2C0, Async>, h
 {
     Timer::after_secs(5).await;
     let mut sensor = bno085::Bno085Imu::new(i2c_bus, hint_pin, 0x4A);
-    match sensor.init().await
-    {
-        Ok(_) => log::info!("BNO085 basladi"),
-        Err(e) => 
-        {
-            log::error!("BNO085 baslamadi: {:?}", e);
-            return;
-        }
-    }
+    sensor.active_fut(0x05, 20_000).await.unwrap();
+    Timer::after_millis(50).await;
+    sensor.active_fut(0x02, 20_000).await.unwrap();
+    Timer::after_millis(50).await;
+    sensor.active_fut(0x04, 20_000).await.unwrap();
+    Timer::after_millis(50).await;
     loop {
-        match sensor.read_quat().await {
-            Ok((r, i, j, k)) => {
-                let (roll_val, pitch_val, yaw_val) = quat_to_euler(r, i, j, k);
-                log::info!("Roll: {:>6.1} | Pitch: {:>6.1} | Yaw: {:>6.1}", roll_val, pitch_val, yaw_val);
+        match sensor.read_val().await
+        {
+            Ok(data) => 
+            {
+                if let Some((r,i,j,k)) = data.quat
+                {
+                    let (roll,pitch,yaw) = quat_to_euler(r, i, j, k);
+                    log::info!("Quaternion -> Roll: {:>6.1} | Pitch: {:>6.1} | Yaw: {:>6.1}", roll,pitch,yaw);
+                }
+                if let Some((gx,gy,gz)) = data.gyro
+                {
+                    log::info!("Gyro -> X: {:>6.2} | Y: {:>6.2} | Z: {:>6.2} rad/s",gx,gy,gz);
+                }
+                if let Some((ax, ay, az)) = data.accel {
+                    log::info!("Accel -> X: {:>6.2} | Y: {:>6.2} | Z: {:>6.2} m/s^2", ax, ay, az);
+                }
             }
-            Err(e) => {
-
-                log::error!("Okuma atlandi. HATA : {:?}", e);
-                Timer::after_millis(100).await;
+            Err(e) =>
+            {
+                log::error!("Okuma hatasi: {:?}", e);
+                Timer::after_millis(50).await;
             }
         }
     }
