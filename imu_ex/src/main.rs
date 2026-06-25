@@ -22,16 +22,16 @@ async fn logger_task(driver: Driver<'static, USB>)
 #[embassy_executor::task]
 async fn mpu_task(mut i2c: I2c<'static, embassy_rp::peripherals::I2C0, Async>)
 {
-    let REG_ADDR: u8 = 0x68;
+    const REG_ADDR: u8 = 0x68;
     const ACCEL_SCALE: f32 = 9.81 / 16384.0;
-
+    const DEGR_CALC: f32 = 1.0 / 131.0;
+    //verimsiz, fpuya gececek, simdilik sadece test amacli
      match i2c.write_async(REG_ADDR, [0x6B, 0x00]).await {
         Ok(_) => {
             log::info!("Imu sensoru devrede");
         }
         Err(e) => {
             log::error!("Imu baslamadi: {:?}", e);
-            return; // Hata varsa çık
         }
     }
     loop {
@@ -44,8 +44,8 @@ async fn mpu_task(mut i2c: I2c<'static, embassy_rp::peripherals::I2C0, Async>)
                 let gx = i16::from_be_bytes([buff[8], buff[9]]);
                 let gy = i16::from_be_bytes([buff[10], buff[11]]);
                 let gz = i16::from_be_bytes([buff[12], buff[13]]);
-                log::info!("X: {:.2}g, Y: {:.2}g, Z: {:.2}g", ax as f32 * ACCEL_SCALE, ay as f32 * ACCEL_SCALE, az as f32 *ACCEL_SCALE);
-                log::info!("GX: {}, GY: {}, GZ: {}", gx, gy, gz);
+                log::info!("X: {:.2}, Y: {:.2}, Z: {:.2}", ax as f32 * ACCEL_SCALE, ay as f32 * ACCEL_SCALE, az as f32 *ACCEL_SCALE);
+                log::info!("GX: {}, GY: {}, GZ: {}", gx as f32 * DEGR_CALC, gy as f32 * DEGR_CALC, gz as f32 * DEGR_CALC);
             }
             Err(e) => {
                 log::error!("I2C okuma hatası: {:?}", e);
