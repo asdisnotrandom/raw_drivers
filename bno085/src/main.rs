@@ -24,7 +24,7 @@ let sinr_cosp = 2.0 * (r * i + j * k);
 let cosr_cosp = 1.0 - 2.0 * (i * i + j * j);
 let roll = atan2f(sinr_cosp, cosr_cosp);
 //pitch
-let sinp = 2.0 * (r * j - k * i);
+let sinp = (2.0 * (r * j - k * i)).clamp(-1.0,1.0);
 let pitch = asinf(sinp);
 //yaw
 let siny_cosp = 2.0 * (r * k + i * j);

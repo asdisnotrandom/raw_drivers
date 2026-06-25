@@ -75,9 +75,10 @@ where
         self.i2c.read(self.address, &mut buffer[..read_len]).await.map_err(BnoError::I2c)?;
         let mut data = BnoData::default();
         let mut has_data = false;
+        let mut unknown_id = 0;
         if channel == 3
         {
-            let mut index = 9;
+            let mut index = 4;
             while index < read_len
             {
                 let report_id = buffer[index];
@@ -120,6 +121,7 @@ where
                 else
                 {
                     //yanlış, eksik raporda döngüden çık, üzme
+                    unknown_id = report_id;
                     break;
                 }
             }
@@ -134,7 +136,7 @@ where
         }
         else
         {
-            Err(BnoError::UnexpectedReport(buffer[9])) // verisiz gereksiz paket
+            Err(BnoError::UnexpectedReport(unknown_id)) // verisiz gereksiz paket
         }
     }
 }
