@@ -5,6 +5,7 @@ MPU6050 için basit, filtresiz verileri USB-CDC protokolüyle herangi bir usb ba
 ### CSV dosyalama ile optimizasyon
 ### (Belki)Health check (WHO_AM_I), zaman (timestamp), verinin ortalanması ve paketlenmesi
 ### beklenen çıktı 
+### embassy-rp odaklı tasarımdansa, embedded-hal-async kütüphanesiyle evrensel yazım sağlanacak.
 MPU6050 health_check (sadece en başta, ana bilgisayara hem sensörü hem sağlığını bildirecek)
 zaman_damgasi,x,y,z,gx,gy,gz
 
