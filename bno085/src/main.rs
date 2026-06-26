@@ -6,17 +6,39 @@ use libm::{atan2f, asinf};
 use embassy_rp::gpio::Input;
 use embassy_rp::i2c::{Async, I2c};
 use embassy_rp::{bind_interrupts};
-use embassy_rp::peripherals::USB;
+use embassy_rp::peripherals::{USB, UART0, DMA_CH0};
 use embassy_rp::usb::{Driver, InterruptHandler};
 use embassy_executor::Spawner;
 use embassy_time::Timer;
+use embassy_rp::uart::{Config as UartConfig, UartTx};
+use embassy_rp::uart::Async as AsyncUart;
 use panic_probe as _;
-
 bind_interrupts!(struct Irqs {
     USBCTRL_IRQ => InterruptHandler<USB>;
     I2C0_IRQ => embassy_rp::i2c::InterruptHandler<embassy_rp::peripherals::I2C0>;
+    UART0_IRQ => embassy_rp::uart::InterruptHandler<UART0>;
+    DMA_IRQ_0 => embassy_rp::dma::InterruptHandler<DMA_CH0>;
 });
 
+fn telemetrry_pack(quat: (f32,f32,f32), gyro: (f32,f32,f32), accel: (f32,f32,f32)) -> [u8; 39]
+{
+    let mut pack = [0u8; 39];
+    pack[0] = 0xAA;
+    pack[1] = 0xBB;
+    let mut offset = 2;
+    for &val in &[quat.0, quat.1, quat.2, gyro.0,gyro.1,gyro.2,accel.0,accel.1,accel.2]
+    {
+        pack[offset..offset+4].copy_from_slice(&val.to_le_bytes());
+        offset+=4;
+    }
+    let mut checksum = 0u8;
+    for i in 2..38
+    {
+        checksum ^= pack[i];
+    }
+    pack[38] = checksum;
+    pack
+}
 fn quat_to_euler(r: f32, i: f32, j: f32, k: f32) -> (f32, f32, f32)
 {
 //roll
@@ -42,7 +64,7 @@ async fn logger_task(driver: Driver<'static, USB>)
 }
 
 #[embassy_executor::task]
-async fn imu_task(i2c_bus: I2c<'static, embassy_rp::peripherals::I2C0, Async>, hint_pin: embassy_rp::gpio::Input<'static>)
+async fn imu_task(i2c_bus: I2c<'static, embassy_rp::peripherals::I2C0, Async>, hint_pin: embassy_rp::gpio::Input<'static>, mut uart_tx: UartTx<'static, AsyncUart>)
 {
     Timer::after_secs(5).await;
     let mut sensor = bno085::Bno085Imu::new(i2c_bus, hint_pin, 0x4A);
@@ -52,22 +74,33 @@ async fn imu_task(i2c_bus: I2c<'static, embassy_rp::peripherals::I2C0, Async>, h
     Timer::after_millis(50).await;
     sensor.active_fut(0x04, 20_000).await.unwrap();
     Timer::after_millis(50).await;
+    let mut last_quat = (0.0, 0.0, 0.0);
+    let mut last_gyro = (0.0, 0.0, 0.0);
+    let mut last_accel = (0.0, 0.0, 0.0);
     loop {
         match sensor.read_val().await
         {
-            Ok(data) => 
+            Ok(data) => //usb loglari icin karmasik, tam uarta geciste nefes alacak (if let Some(g) = data.gyro {last_gyro = g}
             {
                 if let Some((r,i,j,k)) = data.quat
                 {
                     let (roll,pitch,yaw) = quat_to_euler(r, i, j, k);
+                    last_quat = quat_to_euler(r, i, j, k);
                     log::info!("Quaternion -> Roll: {:>6.1} | Pitch: {:>6.1} | Yaw: {:>6.1}", roll,pitch,yaw);
                 }
                 if let Some((gx,gy,gz)) = data.gyro
                 {
+                    last_gyro = (gx,gy,gz);
                     log::info!("Gyro -> X: {:>6.2} | Y: {:>6.2} | Z: {:>6.2} rad/s",gx,gy,gz);
                 }
                 if let Some((ax, ay, az)) = data.accel {
+                    last_accel = (ax,ay,az);
                     log::info!("Accel -> X: {:>6.2} | Y: {:>6.2} | Z: {:>6.2} m/s^2", ax, ay, az);
+                }
+                let binary_pack = telemetrry_pack(last_quat, last_gyro, last_accel);
+                if let Err(_) = uart_tx.write(&binary_pack).await
+                {
+                    log::error!("DMA Uart hatasi");
                 }
             }
             Err(e) =>
@@ -92,6 +125,9 @@ async fn main(spawner: Spawner)
         Irqs,
         Default::default(),
     );
+    let mut uart_conf = UartConfig::default();
+    uart_conf.baudrate = 115200;
+    let uart_tx = UartTx::new(p.UART0, p.PIN_0, p.DMA_CH0, Irqs, uart_conf);
     let hint = Input::new(p.PIN_16, embassy_rp::gpio::Pull::Up);
-    spawner.spawn(imu_task(i2c, hint).expect("imu task baslamadi!"));
+    spawner.spawn(imu_task(i2c, hint, uart_tx).expect("imu task baslamadi!"));
 }
