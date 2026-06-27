@@ -6,18 +6,20 @@ use libm::{atan2f, asinf};
 use embassy_rp::gpio::Input;
 use embassy_rp::i2c::{Async, I2c};
 use embassy_rp::{bind_interrupts};
-use embassy_rp::peripherals::{USB, UART0, DMA_CH0};
+use embassy_rp::peripherals::{USB};
 use embassy_rp::usb::{Driver, InterruptHandler};
 use embassy_executor::Spawner;
+use embassy_usb::Config;
+use embassy_usb::Builder;
+use embassy_usb::UsbDevice;
+use embassy_usb::class::cdc_acm::CdcAcmClass;
+use embassy_usb::class::cdc_acm::State;
 use embassy_time::Timer;
-use embassy_rp::uart::{Config as UartConfig, UartTx};
-use embassy_rp::uart::Async as AsyncUart;
+use static_cell::StaticCell;
 use panic_probe as _;
 bind_interrupts!(struct Irqs {
     USBCTRL_IRQ => InterruptHandler<USB>;
     I2C0_IRQ => embassy_rp::i2c::InterruptHandler<embassy_rp::peripherals::I2C0>;
-    UART0_IRQ => embassy_rp::uart::InterruptHandler<UART0>;
-    DMA_IRQ_0 => embassy_rp::dma::InterruptHandler<DMA_CH0>;
 });
 
 fn telemetrry_pack(quat: (f32,f32,f32), gyro: (f32,f32,f32), accel: (f32,f32,f32)) -> [u8; 39]
@@ -58,13 +60,13 @@ let to_deg = 180.0 / PI;
 }
 
 #[embassy_executor::task]
-async fn logger_task(driver: Driver<'static, USB>)
+async fn usb_task(mut dev: UsbDevice<'static, Driver<'static, USB>>)
 {
-    embassy_usb_logger::run!(1024, log::LevelFilter::Info, driver);
+    dev.run().await;
 }
 
 #[embassy_executor::task]
-async fn imu_task(i2c_bus: I2c<'static, embassy_rp::peripherals::I2C0, Async>, hint_pin: embassy_rp::gpio::Input<'static>, mut uart_tx: UartTx<'static, AsyncUart>)
+async fn imu_task(i2c_bus: I2c<'static, embassy_rp::peripherals::I2C0, Async>, hint_pin: embassy_rp::gpio::Input<'static>, mut usb_tx: CdcAcmClass<'static, Driver<'static, USB>>)
 {
     Timer::after_secs(5).await;
     let mut sensor = bno085::Bno085Imu::new(i2c_bus, hint_pin, 0x4A);
@@ -98,7 +100,7 @@ async fn imu_task(i2c_bus: I2c<'static, embassy_rp::peripherals::I2C0, Async>, h
                     log::info!("Accel -> X: {:>6.2} | Y: {:>6.2} | Z: {:>6.2} m/s^2", ax, ay, az);
                 }
                 let binary_pack = telemetrry_pack(last_quat, last_gyro, last_accel);
-                if let Err(_) = uart_tx.write(&binary_pack).await
+                if let Err(_) = usb_tx.write_packet(&binary_pack).await
                 {
                     log::error!("DMA Uart hatasi");
                 }
@@ -117,7 +119,6 @@ async fn main(spawner: Spawner)
 {
     let p = embassy_rp::init(Default::default());
     let usb_driver = Driver::new(p.USB, Irqs);
-    spawner.spawn(logger_task(usb_driver).expect("Logger baslamadi"));
     let i2c = I2c::new_async(
         p.I2C0,
         p.PIN_5,
@@ -125,9 +126,20 @@ async fn main(spawner: Spawner)
         Irqs,
         Default::default(),
     );
-    let mut uart_conf = UartConfig::default();
-    uart_conf.baudrate = 115200;
-    let uart_tx = UartTx::new(p.UART0, p.PIN_0, p.DMA_CH0, Irqs, uart_conf);
+    let usb_conf = Config::new(0x1029, 0x0001);
+    static CONFIG_DESCRIPTOR: StaticCell<[u8; 256]> = StaticCell::new();
+    static BOS_DESCRIPTOR: StaticCell<[u8; 256]> = StaticCell::new();
+    static CONTROL_BUF: StaticCell<[u8; 64]> = StaticCell::new();
+    static STATE: StaticCell<State> = StaticCell::new();
+    
+    let config_descriptor = CONFIG_DESCRIPTOR.init([0; 256]);
+    let bos_descriptor = BOS_DESCRIPTOR.init([0; 256]);
+    let control_buf = CONTROL_BUF.init([0; 64]);
+    let usb_state = STATE.init(State::new());
+    let mut usb_builder = Builder::new(usb_driver, usb_conf, config_descriptor, bos_descriptor, &mut [], control_buf);
+    let usb_baba = CdcAcmClass::new(&mut usb_builder, usb_state, 64);
+    let usb_device = usb_builder.build();
     let hint = Input::new(p.PIN_16, embassy_rp::gpio::Pull::Up);
-    spawner.spawn(imu_task(i2c, hint, uart_tx).expect("imu task baslamadi!"));
+    spawner.spawn(usb_task(usb_device).unwrap());
+    spawner.spawn(imu_task(i2c, hint, usb_baba).expect("imu task baslamadi!"));
 }

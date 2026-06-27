@@ -24,3 +24,9 @@ biraz ip üstünde yürüyen kod, sequence kontrol yok. Sonrasında eklenebilir.
 Reportlar o kadar açık değil
 Watchdog veya timeoutlar, yeniden denemeler arttırılabilir
 baud rate 115200, 921600 e çekilip test edilebilir, hızı 8 kat arttırır.
+timehz değişkeni mikrosaniye cinsinden alıyor, fonksiyonu yazarken hz çevirmeyi düşünerek koydum
+
+PINLAYOUT - test
+-SCL - GPIO5 - 7. pin
+-SDA - GPIO4 - 6. pin
+-HINT or INT - GPIO16 - 21.pin
