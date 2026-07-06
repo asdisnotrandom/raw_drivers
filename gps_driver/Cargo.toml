@@ -13,6 +13,7 @@ embassy-usb = "0.6.0"
 embedded-io-async = "0.7.0"
 log = "0.4.33"
 panic-probe = "1.0.0"
+static_cell = "2.1.1"
 
 [profile.release]
 opt-level = 3

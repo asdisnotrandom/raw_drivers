@@ -1,8 +1,12 @@
 #![no_std]
+
 use embedded_io_async::Write;
 use embedded_io_async::{BufRead, ErrorType};
+use embassy_time;
+
+use crate::UbxAsama::PayloadPart;
 #[derive(Debug, Default)]
-pub struct Output {
+pub struct GPSOutput {
     pub algi_boyut: u8,
     pub uydu_sayi: u8,
     pub boylam: i32,
@@ -66,11 +70,11 @@ where
         *chec1 = chec1.wrapping_add(byte);
         *chec2 = chec2.wrapping_add(*chec1);
     }
-    fn parse_bidi(buff: &[u8; 100]) -> Output {
+    fn parse_bidi(buff: &[u8; 100]) -> GPSOutput {
         let i32_conv = |idx: usize| -> i32 {
             i32::from_le_bytes([buff[idx], buff[idx + 1], buff[idx + 2], buff[idx + 3]])
         };
-        Output {
+        GPSOutput {
             algi_boyut: buff[20],
             uydu_sayi: buff[23],
             boylam: i32_conv(24),
@@ -80,16 +84,28 @@ where
             yonelim: i32_conv(64),
         }
     }
-    pub async fn aktif_et_nav_pvt<W>(&self, tx: &mut W) -> Result<(), W::Error>
+    pub async fn aktif_et_nav_pvt<W>(tx: &mut W) -> Result<(), W::Error>
     where
         W: Write,
     {
         const ENABLE_NAV_PVT: [u8; 11] = [
             0xB5, 0x62, 0x06, 0x01, 0x03, 0x00, 0x01, 0x07, 0x01, 0x13, 0x51,
         ];
-        tx.write_all(&ENABLE_NAV_PVT).await
+        tx.write_all(&ENABLE_NAV_PVT).await?;
+        embassy_time::Timer::after(embassy_time::Duration::from_millis(20)).await;
+        const CFG_RATE_10HZ: [u8; 14] = [
+            0xB5, 0x62, // Sync
+            0x06, 0x08, // Class (CFG) ve ID (RATE)
+            0x06, 0x00, // Payload Length (6 byte)
+            0x64, 0x00, // measRate: 100 ms (10Hz)
+            0x01, 0x00, // navRate: 1
+            0x01, 0x00, // timeRef: 1 (GPS time)
+            0x7A, 0x12, // Checksum
+        ];
+        tx.write_all(&CFG_RATE_10HZ).await?;
+        Ok(())
     }
-    pub async fn read_data(&mut self) -> Result<Output, UbxError<UART::Error>> {
+    pub async fn read_data(&mut self) -> Result<GPSOutput, UbxError<UART::Error>> {
         loop {
             let buffer = self.uart.fill_buf().await.map_err(UbxError::Uart)?;
             let mut kullan_byte = 0;
@@ -135,7 +151,13 @@ where
                             sonuc = Some(Err(UbxError::BuffOver));
                             break;
                         }
-                        self.asama = UbxAsama::PayloadPart;
+                        if self.payload_len == 0
+                        {
+                            self.asama = UbxAsama::Cheksum1Part;
+                        }
+                        else {
+                            self.asama = PayloadPart;
+                        }
                     }
                     UbxAsama::PayloadPart => {
                         Self::checkup(&mut self.check1, &mut self.check2, b);
@@ -163,6 +185,7 @@ where
                             sonuc = Some(Ok(Self::parse_bidi(&self.payload_buffer)));
                             break;
                         } else {
+                            
                         }
                     }
                 }
