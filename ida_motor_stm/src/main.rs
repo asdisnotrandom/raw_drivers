@@ -1,7 +1,6 @@
 #![no_std]
 #![no_main]
 
-use cortex_m::prelude::_embedded_hal_Pwm;
 use defmt::*;
 use defmt_rtt as _;
 use embassy_stm32::gpio::OutputType::PushPull;
