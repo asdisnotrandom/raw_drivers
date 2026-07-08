@@ -21,3 +21,5 @@ yonelim 4xu8 => 4byte
 
 4 bytelik bu verileri from_le_bytes ile 0 islemci maliyetiyle parse edebilirsiniz.
 
+TIMESTAMP EKLENMELI
+HEADER CRC
