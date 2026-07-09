@@ -37,14 +37,23 @@ async fn gps_task(mut tx: BufferedUartTx, rx: BufferedUartRx, mut usb_tx: CdcAcm
         {
             Ok(data) =>
             {
-                let mut bucket = [0u8; 22];
-                bucket[0] = data.algi_boyut;
-                bucket[1] = data.uydu_sayi;
-                bucket[2..6].copy_from_slice(&data.boylam.to_le_bytes());
-                bucket[6..10].copy_from_slice(&data.enlem.to_le_bytes());
-                bucket[10..14].copy_from_slice(&data.yukseklik_mm.to_le_bytes());
-                bucket[14..18].copy_from_slice(&data.hiz.to_le_bytes());
-                bucket[18..22].copy_from_slice(&data.yonelim.to_le_bytes());
+                let mut bucket = [0u8; 33];
+                bucket[0] = 0xAA;
+                bucket[1] = 0xBB;
+                bucket[2] = data.algi_boyut;
+                bucket[3] = data.uydu_sayi;
+                bucket[4..8].copy_from_slice(&data.boylam.to_le_bytes());
+                bucket[8..12].copy_from_slice(&data.enlem.to_le_bytes());
+                bucket[12..16].copy_from_slice(&data.yukseklik_mm.to_le_bytes());
+                bucket[16..20].copy_from_slice(&data.hiz.to_le_bytes());
+                bucket[20..24].copy_from_slice(&data.yonelim.to_le_bytes());
+                let zaman_ms: u64 = embassy_time::Instant::now().as_millis() as u64;
+                bucket[24..32].copy_from_slice(&zaman_ms.to_le_bytes());
+                let mut calc_checksum = 0u8;
+                for i in 2..32 {
+                    calc_checksum ^= bucket[i];
+                }
+                bucket[32] = calc_checksum;
                 if let Err(_) = usb_tx.write_packet(&bucket).await
                 {
                     log::error!("USB Serial hatasi");
