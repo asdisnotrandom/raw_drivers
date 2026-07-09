@@ -14,7 +14,7 @@ use embassy_usb::Builder;
 use embassy_usb::UsbDevice;
 use embassy_usb::class::cdc_acm::CdcAcmClass;
 use embassy_usb::class::cdc_acm::State;
-use embassy_time::Timer;
+use embassy_time::{Timer, Instant};
 use static_cell::StaticCell;
 use panic_probe as _;
 bind_interrupts!(struct Irqs {
@@ -22,9 +22,9 @@ bind_interrupts!(struct Irqs {
     I2C0_IRQ => embassy_rp::i2c::InterruptHandler<embassy_rp::peripherals::I2C0>;
 });
 
-fn telemetrry_pack(quat: (f32,f32,f32), gyro: (f32,f32,f32), accel: (f32,f32,f32)) -> [u8; 39]
+fn telemetrry_pack(quat: (f32,f32,f32), gyro: (f32,f32,f32), accel: (f32,f32,f32), zaman_ms: u64) -> [u8; 47]
 {
-    let mut pack = [0u8; 39];
+    let mut pack = [0u8; 47];
     pack[0] = 0xAA;
     pack[1] = 0xBB;
     let mut offset = 2;
@@ -33,12 +33,13 @@ fn telemetrry_pack(quat: (f32,f32,f32), gyro: (f32,f32,f32), accel: (f32,f32,f32
         pack[offset..offset+4].copy_from_slice(&val.to_le_bytes());
         offset+=4;
     }
+    pack[offset..offset+8].copy_from_slice(&zaman_ms.to_le_bytes());
     let mut checksum = 0u8;
-    for i in 2..38
+    for i in 2..46
     {
         checksum ^= pack[i];
     }
-    pack[38] = checksum;
+    pack[46] = checksum;
     pack
 }
 fn quat_to_euler(r: f32, i: f32, j: f32, k: f32) -> (f32, f32, f32)
@@ -99,7 +100,8 @@ async fn imu_task(i2c_bus: I2c<'static, embassy_rp::peripherals::I2C0, Async>, h
                     last_accel = (ax,ay,az);
                     log::info!("Accel -> X: {:>6.2} | Y: {:>6.2} | Z: {:>6.2} m/s^2", ax, ay, az);
                 }
-                let binary_pack = telemetrry_pack(last_quat, last_gyro, last_accel);
+                let milisaniye = Instant::now().as_millis();
+                let binary_pack = telemetrry_pack(last_quat, last_gyro, last_accel, milisaniye);
                 if let Err(_) = usb_tx.write_packet(&binary_pack).await
                 {
                     log::error!("DMA Uart hatasi");
