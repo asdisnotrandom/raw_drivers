@@ -100,7 +100,7 @@ async fn imu_task(i2c_bus: I2c<'static, embassy_rp::peripherals::I2C0, Async>, h
                     last_accel = (ax,ay,az);
                     log::info!("Accel -> X: {:>6.2} | Y: {:>6.2} | Z: {:>6.2} m/s^2", ax, ay, az);
                 }
-                let milisaniye = Instant::now().as_millis();
+                let milisaniye: u64 = Instant::now().as_millis() as u64;
                 let binary_pack = telemetrry_pack(last_quat, last_gyro, last_accel, milisaniye);
                 if let Err(_) = usb_tx.write_packet(&binary_pack).await
                 {
